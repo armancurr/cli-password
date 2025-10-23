@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # pazman installer script
-# Usage: curl -fsSL https://raw.githubusercontent.com/YOUR_USERNAME/pazman/main/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/armancurr/cli-password/main/install.sh | bash
 
 set -e  # Exit on any error
 
@@ -13,7 +13,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-REPO_URL="https://raw.githubusercontent.com/YOUR_USERNAME/pazman/main"
+REPO_URL="https://raw.githubusercontent.com/armancurr/cli-password/main"
 INSTALL_DIR="$HOME/.local/bin"
 SCRIPT_NAME="pazman"
 
@@ -115,7 +115,7 @@ is_in_path() {
 # Add to PATH instructions
 setup_path() {
     if ! is_in_path "$INSTALL_DIR"; then
-        print_message "$YELLOW" "\n⚠️  Installation directory is not in your PATH"
+        print_message "$YELLOW" "\n  Installation directory is not in your PATH"
         print_message "$YELLOW" "Add the following line to your shell configuration file:\n"
         
         # Detect shell and give appropriate instructions
@@ -158,7 +158,7 @@ test_installation() {
 print_success() {
     echo ""
     print_message "$GREEN" "================================"
-    print_message "$GREEN" "   Installation Complete! 🎉"
+    print_message "$GREEN" "   Installation Complete!   "
     print_message "$GREEN" "================================"
     echo ""
     print_message "$BLUE" "Quick start:"
@@ -167,7 +167,7 @@ print_success() {
     echo "  3. Your password is generated and copied!"
     echo ""
     print_message "$BLUE" "Documentation:"
-    echo "  https://github.com/YOUR_USERNAME/pazman"
+    echo "  https://github.com/armancurr/cli-password"
     echo ""
 }
 

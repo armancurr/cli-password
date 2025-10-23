@@ -5,10 +5,141 @@
 
 set -e
 
+PAZMAN_VERSION="2.0.0"
 PAZMAN_DIR="$HOME/.pazman"
 PASSWORDS_FILE="$PAZMAN_DIR/passwords.csv"
 MASTER_HASH_FILE="$PAZMAN_DIR/.master"
 CLIPBOARD_TIMEOUT=30
+
+# ============================================================================
+# ANSI Color Codes & Styling
+# ============================================================================
+RESET="\033[0m"
+BOLD="\033[1m"
+DIM="\033[2m"
+ITALIC="\033[3m"
+UNDERLINE="\033[4m"
+BLINK="\033[5m"
+
+# Foreground Colors
+BLACK="\033[30m"
+RED="\033[31m"
+GREEN="\033[32m"
+YELLOW="\033[33m"
+BLUE="\033[34m"
+MAGENTA="\033[35m"
+CYAN="\033[36m"
+WHITE="\033[37m"
+
+# Bright Foreground Colors
+BRIGHT_BLACK="\033[90m"
+BRIGHT_RED="\033[91m"
+BRIGHT_GREEN="\033[92m"
+BRIGHT_YELLOW="\033[93m"
+BRIGHT_BLUE="\033[94m"
+BRIGHT_MAGENTA="\033[95m"
+BRIGHT_CYAN="\033[96m"
+BRIGHT_WHITE="\033[97m"
+
+# Background Colors
+BG_BLACK="\033[40m"
+BG_RED="\033[41m"
+BG_GREEN="\033[42m"
+BG_YELLOW="\033[43m"
+BG_BLUE="\033[44m"
+BG_MAGENTA="\033[45m"
+BG_CYAN="\033[46m"
+BG_WHITE="\033[47m"
+
+# ============================================================================
+# Simple Box Drawing Characters (ASCII)
+# ============================================================================
+BOX_H="-"          # Horizontal line
+BOX_V="|"          # Vertical line
+BOX_TL="+"         # Top-left corner
+BOX_TR="+"         # Top-right corner
+BOX_BL="+"         # Bottom-left corner
+BOX_BR="+"         # Bottom-right corner
+BOX_VR="+"         # Vertical right (left T-junction)
+BOX_VL="+"         # Vertical left (right T-junction)
+BOX_HU="+"         # Horizontal up (bottom T-junction)
+BOX_HD="+"         # Horizontal down (top T-junction)
+BOX_PLUS="+"       # Cross
+
+# Simple Characters (no emojis)
+CHECK="[OK]"
+CROSS="[X]"
+ARROW=">"
+LOCK="[LOCK]"
+KEY="[KEY]"
+WARN="[!]"
+
+# ============================================================================
+# UI Utility Functions
+# ============================================================================
+
+# Print colored message
+print_msg() {
+    local color=$1
+    local message=$2
+    echo -e "${color}${message}${RESET}"
+}
+
+# Print success message
+print_success() {
+    echo -e "${BRIGHT_GREEN}${CHECK}${RESET} ${GREEN}$1${RESET}"
+}
+
+# Print error message
+print_error() {
+    echo -e "${BRIGHT_RED}${CROSS}${RESET} ${RED}$1${RESET}" >&2
+}
+
+# Print warning message
+print_warning() {
+    echo -e "${BRIGHT_YELLOW}${WARN}${RESET} ${YELLOW}$1${RESET}"
+}
+
+# Print info message
+print_info() {
+    echo -e "${BRIGHT_CYAN}${ARROW}${RESET} ${CYAN}$1${RESET}"
+}
+
+# Draw a horizontal line
+draw_line() {
+    local width=${1:-60}
+    local char=${2:-$BOX_H}
+    local color=${3:-$CYAN}
+    printf "${color}%${width}s${RESET}\n" | tr ' ' "$char"
+}
+
+# Draw a simple header
+draw_header() {
+    local text="$1"
+    echo ""
+    echo -e "${BOLD}${BRIGHT_CYAN}${text}${RESET}"
+    echo -e "${CYAN}$(printf '%.0s-' {1..50})${RESET}"
+}
+
+# Draw a simple box around content
+draw_box() {
+    local text="$1"
+    local color=${2:-$CYAN}
+    echo ""
+    echo -e "${color}${text}${RESET}"
+    echo -e "${color}$(printf '%.0s-' {1..40})${RESET}"
+}
+
+# Progress indicator
+show_progress() {
+    local message="$1"
+    echo -ne "${DIM}${message}...${RESET}"
+}
+
+# Clear progress line
+clear_progress() {
+    echo -e "\r\033[K"
+}
 
 # Initialize pazman directory and files
 init_pazman() {
@@ -30,22 +161,27 @@ init_pazman() {
 # Get or create master password
 get_master_password() {
     if [ ! -f "$MASTER_HASH_FILE" ]; then
-        echo "First time setup - Create a master password for pazman:" >&2
-        read -s -p "Master password: " MASTER_PASS
+        echo ""
+        echo -e "${BOLD}${YELLOW}First Time Setup${RESET}"
+        print_info "Create a strong master password for pazman"
+        echo ""
+        read -s -p "$(echo -e "${YELLOW}Master password: ${RESET}")" MASTER_PASS
         echo >&2
-        read -s -p "Confirm master password: " MASTER_PASS_CONFIRM
+        read -s -p "$(echo -e "${YELLOW}Confirm password: ${RESET}")" MASTER_PASS_CONFIRM
         echo >&2
         
         if [ "$MASTER_PASS" != "$MASTER_PASS_CONFIRM" ]; then
-            echo "Error: Passwords do not match" >&2
+            print_error "Passwords do not match"
             exit 1
         fi
         
         # Store hash of master password
         echo -n "$MASTER_PASS" | openssl dgst -sha256 -binary | base64 > "$MASTER_HASH_FILE"
         chmod 600 "$MASTER_HASH_FILE"
+        print_success "Master password created successfully"
+        echo ""
     else
-        read -s -p "Master password: " MASTER_PASS
+        read -s -p "$(echo -e "${YELLOW}Master password: ${RESET}")" MASTER_PASS
         echo >&2
         
         # Verify master password
@@ -53,7 +189,7 @@ get_master_password() {
         ENTERED_HASH=$(echo -n "$MASTER_PASS" | openssl dgst -sha256 -binary | base64)
         
         if [ "$STORED_HASH" != "$ENTERED_HASH" ]; then
-            echo "Error: Invalid master password" >&2
+            print_error "Invalid master password"
             exit 1
         fi
     fi
@@ -118,11 +254,11 @@ copy_to_clipboard() {
         echo -n "$text" | wl-copy
         (sleep $CLIPBOARD_TIMEOUT && wl-copy --clear 2>/dev/null) &
     else
-        echo "Warning: No clipboard utility found (install xclip, wl-clipboard, or use clip.exe)" >&2
+        print_warning "No clipboard utility found (install xclip, wl-clipboard, or use clip.exe)"
         return 1
     fi
     
-    echo "Password for '$service' copied to clipboard (will clear in ${CLIPBOARD_TIMEOUT}s)"
+    print_success "Copied to clipboard (auto-clears in ${CLIPBOARD_TIMEOUT}s)"
 }
 
 # Check if service exists in CSV
@@ -145,10 +281,12 @@ cmd_set() {
     local password="$2"
     
     if [ -z "$service" ]; then
-        echo "Error: Service name required" >&2
-        echo "Usage: pazman set <service> [password]" >&2
+        print_error "Service name required"
+        echo -e "${DIM}Usage: pazman set <service> [password]${RESET}" >&2
         exit 1
     fi
+    
+    draw_header "Setting Password"
     
     # Get master password
     local master=$(get_master_password)
@@ -156,6 +294,7 @@ cmd_set() {
     # Generate password if not provided
     if [ -z "$password" ]; then
         password=$(generate_password)
+        print_info "Generated ${BOLD}${#password}${RESET}${CYAN}-character password"
     fi
     
     # Encrypt password
@@ -172,7 +311,7 @@ cmd_set() {
     
     # Copy to clipboard
     copy_to_clipboard "$password" "$service"
-    echo "Password for '$service' saved"
+    echo ""
 }
 
 # Get password for service
@@ -180,15 +319,18 @@ cmd_get() {
     local service="$1"
     
     if [ -z "$service" ]; then
-        echo "Error: Service name required" >&2
-        echo "Usage: pazman get <service>" >&2
+        print_error "Service name required"
+        echo -e "${DIM}Usage: pazman get <service>${RESET}" >&2
         exit 1
     fi
     
     if ! service_exists "$service"; then
-        echo "Error: Service '$service' not found" >&2
+        print_error "Service '${BOLD}${service}${RESET}${RED}' not found"
+        print_info "Use 'pazman list' to see available services"
         exit 1
     fi
+    
+    draw_header "Retrieving Password"
     
     # Get master password
     local master=$(get_master_password)
@@ -198,12 +340,13 @@ cmd_get() {
     local password=$(decrypt_password "$encrypted" "$master")
     
     if [ -z "$password" ]; then
-        echo "Error: Failed to decrypt password" >&2
+        print_error "Failed to decrypt password"
         exit 1
     fi
     
     # Copy to clipboard
     copy_to_clipboard "$password" "$service"
+    echo ""
 }
 
 # Delete password for service
@@ -211,20 +354,31 @@ cmd_pop() {
     local service="$1"
     
     if [ -z "$service" ]; then
-        echo "Error: Service name required" >&2
-        echo "Usage: pazman pop <service>" >&2
+        print_error "Service name required"
+        echo -e "${DIM}Usage: pazman pop <service>${RESET}" >&2
         exit 1
     fi
     
     if ! service_exists "$service"; then
-        echo "Error: Service '$service' not found" >&2
+        print_error "Service '${BOLD}${service}${RESET}${RED}' not found"
         exit 1
+    fi
+    
+    draw_header "Deleting Password"
+    print_warning "Delete password for '${BOLD}${service}${RESET}${YELLOW}'?"
+    read -p "$(echo -e "${YELLOW}Type 'yes' to confirm: ${RESET}")" confirmation
+    
+    if [ "$confirmation" != "yes" ]; then
+        print_info "Cancelled"
+        echo ""
+        exit 0
     fi
     
     # Remove entry
     sed -i.bak "/^${service},/d" "$PASSWORDS_FILE" && rm -f "${PASSWORDS_FILE}.bak"
     
-    echo "Password for '$service' deleted"
+    print_success "Password deleted"
+    echo ""
 }
 
 # Update existing password
@@ -233,15 +387,18 @@ cmd_put() {
     local password="$2"
     
     if [ -z "$service" ]; then
-        echo "Error: Service name required" >&2
-        echo "Usage: pazman put <service> [password]" >&2
+        print_error "Service name required"
+        echo -e "${DIM}Usage: pazman put <service> [password]${RESET}" >&2
         exit 1
     fi
     
     if ! service_exists "$service"; then
-        echo "Error: Service '$service' not found. Use 'pazman set' to create a new entry" >&2
+        print_error "Service '${BOLD}${service}${RESET}${RED}' not found"
+        print_info "Use 'pazman set' to create a new entry"
         exit 1
     fi
+    
+    draw_header "Updating Password"
     
     # Get master password
     local master=$(get_master_password)
@@ -249,6 +406,7 @@ cmd_put() {
     # Generate password if not provided
     if [ -z "$password" ]; then
         password=$(generate_password)
+        print_info "Generated ${BOLD}${#password}${RESET}${CYAN}-character password"
     fi
     
     # Encrypt password
@@ -263,40 +421,77 @@ cmd_put() {
     
     # Copy to clipboard
     copy_to_clipboard "$password" "$service"
-    echo "Password for '$service' updated"
+    echo ""
 }
 
 # List all services (without passwords)
 cmd_list() {
     if [ ! -f "$PASSWORDS_FILE" ] || [ ! -s "$PASSWORDS_FILE" ]; then
-        echo "No passwords stored yet"
+        draw_header "Password Vault"
+        print_info "No passwords stored yet"
+        echo ""
         return
     fi
     
-    echo "Stored services:"
-    cut -d',' -f1 "$PASSWORDS_FILE" | sort | sed 's/^/  - /'
+    draw_header "Password Vault"
+    
+    # Count services
+    local count=$(wc -l < "$PASSWORDS_FILE")
+    echo -e "${CYAN}Total: ${BOLD}${count}${RESET}${CYAN} password(s)${RESET}"
+    echo ""
+    
+    # List services
+    local index=1
+    while IFS= read -r service; do
+        printf "${DIM}%2d.${RESET} ${BLUE}%s${RESET}\n" "$index" "$service"
+        index=$((index + 1))
+    done < <(cut -d',' -f1 "$PASSWORDS_FILE" | sort)
+    echo ""
 }
 
 # Show usage
 show_usage() {
-    cat << EOF
-pazman - Secure CLI Password Manager
+    echo ""
+    echo -e "${BOLD}${BRIGHT_CYAN}pazman - Secure CLI Password Manager${RESET}"
+    echo -e "${CYAN}$(printf '%.0s-' {1..50})${RESET}"
+    echo ""
+    
+    echo -e "${BOLD}${YELLOW}USAGE:${RESET}"
+    echo -e "  ${CYAN}pazman${RESET} ${GREEN}set${RESET} <service> [password]"
+    echo -e "  ${CYAN}pazman${RESET} ${GREEN}get${RESET} <service>"
+    echo -e "  ${CYAN}pazman${RESET} ${GREEN}put${RESET} <service> [password]"
+    echo -e "  ${CYAN}pazman${RESET} ${GREEN}pop${RESET} <service>"
+    echo -e "  ${CYAN}pazman${RESET} ${GREEN}list${RESET}"
+    echo -e "  ${CYAN}pazman${RESET} ${GREEN}version${RESET}"
+    echo -e "  ${CYAN}pazman${RESET} ${GREEN}help${RESET}"
+    echo ""
+    
+    echo -e "${BOLD}${YELLOW}COMMANDS:${RESET}"
+    echo -e "  ${GREEN}set${RESET}     Add/update password (auto-generates if omitted)"
+    echo -e "  ${GREEN}get${RESET}     Retrieve password (copies to clipboard)"
+    echo -e "  ${GREEN}put${RESET}     Update existing password"
+    echo -e "  ${GREEN}pop${RESET}     Delete password"
+    echo -e "  ${GREEN}list${RESET}    List all stored services"
+    echo -e "  ${GREEN}version${RESET} Show version information"
+    echo -e "  ${GREEN}help${RESET}    Show this help message"
+    echo ""
+    
+    echo -e "${BOLD}${YELLOW}SECURITY:${RESET}"
+    echo -e "  ${GREEN}*${RESET} AES-256-CBC encryption"
+    echo -e "  ${GREEN}*${RESET} Master password required"
+    echo -e "  ${GREEN}*${RESET} Passwords never shown in terminal"
+    echo -e "  ${GREEN}*${RESET} Clipboard auto-clears after ${CLIPBOARD_TIMEOUT}s"
+    echo ""
+}
 
-Usage:
-  pazman set <service> [password]    Add/update password (generates if omitted)
-  pazman get <service>               Retrieve password (copies to clipboard)
-  pazman put <service> [password]    Update existing password
-  pazman pop <service>               Delete password
-  pazman list                        List all stored services
-  pazman help                        Show this help message
-
-Security:
-  - Passwords are encrypted with AES-256-CBC
-  - Master password required for all operations
-  - Passwords never displayed in terminal
-  - Clipboard auto-clears after ${CLIPBOARD_TIMEOUT} seconds
-  - Storage: ${PASSWORDS_FILE} (chmod 600)
-EOF
+# Show version information
+show_version() {
+    echo ""
+    echo -e "${BOLD}${MAGENTA}pazman Password Manager${RESET}"
+    echo -e "${CYAN}Version: ${RESET}${PAZMAN_VERSION}"
+    echo -e "${CYAN}Encryption: ${RESET}AES-256-CBC"
+    echo -e "${CYAN}License: ${RESET}MIT"
+    echo ""
 }
 
 # Main
@@ -322,12 +517,17 @@ main() {
         list|ls)
             cmd_list
             ;;
+        version|--version|-v)
+            show_version
+            ;;
         help|--help|-h|"")
             show_usage
             ;;
         *)
-            echo "Error: Unknown command '$command'" >&2
-            echo "Run 'pazman help' for usage information" >&2
+            echo "" >&2
+            print_error "Unknown command '${BOLD}${command}${RESET}${RED}'"
+            print_info "Run '${BOLD}pazman help${RESET}${CYAN}' for usage information" >&2
+            echo "" >&2
             exit 1
             ;;
     esac
