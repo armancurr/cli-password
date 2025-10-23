@@ -1,0 +1,336 @@
+#!/bin/bash
+
+# pazman - A secure CLI password manager
+# Usage: pazman <command> <service> [password]
+
+set -e
+
+PAZMAN_DIR="$HOME/.pazman"
+PASSWORDS_FILE="$PAZMAN_DIR/passwords.csv"
+MASTER_HASH_FILE="$PAZMAN_DIR/.master"
+CLIPBOARD_TIMEOUT=30
+
+# Initialize pazman directory and files
+init_pazman() {
+    if [ ! -d "$PAZMAN_DIR" ]; then
+        mkdir -p "$PAZMAN_DIR"
+        chmod 700 "$PAZMAN_DIR"
+    fi
+    
+    if [ ! -f "$PASSWORDS_FILE" ]; then
+        touch "$PASSWORDS_FILE"
+        chmod 600 "$PASSWORDS_FILE"
+    fi
+    
+    if [ ! -f "$MASTER_HASH_FILE" ]; then
+        chmod 600 "$MASTER_HASH_FILE" 2>/dev/null || true
+    fi
+}
+
+# Get or create master password
+get_master_password() {
+    if [ ! -f "$MASTER_HASH_FILE" ]; then
+        echo "First time setup - Create a master password for pazman:" >&2
+        read -s -p "Master password: " MASTER_PASS
+        echo >&2
+        read -s -p "Confirm master password: " MASTER_PASS_CONFIRM
+        echo >&2
+        
+        if [ "$MASTER_PASS" != "$MASTER_PASS_CONFIRM" ]; then
+            echo "Error: Passwords do not match" >&2
+            exit 1
+        fi
+        
+        # Store hash of master password
+        echo -n "$MASTER_PASS" | openssl dgst -sha256 -binary | base64 > "$MASTER_HASH_FILE"
+        chmod 600 "$MASTER_HASH_FILE"
+    else
+        read -s -p "Master password: " MASTER_PASS
+        echo >&2
+        
+        # Verify master password
+        STORED_HASH=$(cat "$MASTER_HASH_FILE")
+        ENTERED_HASH=$(echo -n "$MASTER_PASS" | openssl dgst -sha256 -binary | base64)
+        
+        if [ "$STORED_HASH" != "$ENTERED_HASH" ]; then
+            echo "Error: Invalid master password" >&2
+            exit 1
+        fi
+    fi
+    
+    echo "$MASTER_PASS"
+}
+
+# Encrypt password
+encrypt_password() {
+    local password="$1"
+    local master="$2"
+    echo -n "$password" | openssl enc -aes-256-cbc -a -A -salt -pbkdf2 -pass pass:"$master" 2>/dev/null
+}
+
+# Decrypt password
+decrypt_password() {
+    local encrypted="$1"
+    local master="$2"
+    echo -n "$encrypted" | openssl enc -aes-256-cbc -d -a -A -pbkdf2 -pass pass:"$master" 2>/dev/null
+}
+
+# Generate a strong random password
+generate_password() {
+    # Generate a 20-character password with mixed characters
+    local length=20
+    local password=""
+    
+    # Ensure we have at least one of each required character type
+    local upper=$(tr -dc 'A-Z' < /dev/urandom | head -c 4)
+    local lower=$(tr -dc 'a-z' < /dev/urandom | head -c 4)
+    local digit=$(tr -dc '0-9' < /dev/urandom | head -c 4)
+    local special=$(tr -dc '!@#$%^&*()_+-=[]{}|;:,.<>?' < /dev/urandom | head -c 4)
+    
+    # Fill the rest with random characters
+    local rest=$(tr -dc 'A-Za-z0-9!@#$%^&*()_+-=[]{}|;:,.<>?' < /dev/urandom | head -c 4)
+    
+    # Combine and shuffle
+    password="${upper}${lower}${digit}${special}${rest}"
+    echo "$password" | fold -w1 | shuf | tr -d '\n'
+}
+
+# Copy to clipboard and auto-clear after timeout
+copy_to_clipboard() {
+    local text="$1"
+    local service="$2"
+    
+    # Detect clipboard command
+    if command -v clip.exe &> /dev/null; then
+        # Windows (Git Bash, WSL, Cygwin)
+        echo -n "$text" | clip.exe
+        (sleep $CLIPBOARD_TIMEOUT && echo -n "" | clip.exe 2>/dev/null) &
+    elif command -v pbcopy &> /dev/null; then
+        # macOS
+        echo -n "$text" | pbcopy
+        (sleep $CLIPBOARD_TIMEOUT && echo -n "" | pbcopy 2>/dev/null) &
+    elif command -v xclip &> /dev/null; then
+        # Linux with X11
+        echo -n "$text" | xclip -selection clipboard
+        (sleep $CLIPBOARD_TIMEOUT && echo -n "" | xclip -selection clipboard 2>/dev/null) &
+    elif command -v wl-copy &> /dev/null; then
+        # Linux with Wayland
+        echo -n "$text" | wl-copy
+        (sleep $CLIPBOARD_TIMEOUT && wl-copy --clear 2>/dev/null) &
+    else
+        echo "Warning: No clipboard utility found (install xclip, wl-clipboard, or use clip.exe)" >&2
+        return 1
+    fi
+    
+    echo "Password for '$service' copied to clipboard (will clear in ${CLIPBOARD_TIMEOUT}s)"
+}
+
+# Check if service exists in CSV
+service_exists() {
+    local service="$1"
+    grep -q "^${service}," "$PASSWORDS_FILE" 2>/dev/null
+}
+
+# Get encrypted password for service
+get_encrypted_password() {
+    local service="$1"
+    local line=$(grep "^${service}," "$PASSWORDS_FILE" 2>/dev/null)
+    # Remove service name and comma, keep everything after
+    echo "${line#*,}"
+}
+
+# Set/update password for service
+cmd_set() {
+    local service="$1"
+    local password="$2"
+    
+    if [ -z "$service" ]; then
+        echo "Error: Service name required" >&2
+        echo "Usage: pazman set <service> [password]" >&2
+        exit 1
+    fi
+    
+    # Get master password
+    local master=$(get_master_password)
+    
+    # Generate password if not provided
+    if [ -z "$password" ]; then
+        password=$(generate_password)
+    fi
+    
+    # Encrypt password
+    local encrypted=$(encrypt_password "$password" "$master")
+    
+    # Remove existing entry if present
+    if service_exists "$service"; then
+        sed -i.bak "/^${service},/d" "$PASSWORDS_FILE" && rm -f "${PASSWORDS_FILE}.bak"
+    fi
+    
+    # Add new entry
+    echo "${service},${encrypted}" >> "$PASSWORDS_FILE"
+    chmod 600 "$PASSWORDS_FILE"
+    
+    # Copy to clipboard
+    copy_to_clipboard "$password" "$service"
+    echo "Password for '$service' saved"
+}
+
+# Get password for service
+cmd_get() {
+    local service="$1"
+    
+    if [ -z "$service" ]; then
+        echo "Error: Service name required" >&2
+        echo "Usage: pazman get <service>" >&2
+        exit 1
+    fi
+    
+    if ! service_exists "$service"; then
+        echo "Error: Service '$service' not found" >&2
+        exit 1
+    fi
+    
+    # Get master password
+    local master=$(get_master_password)
+    
+    # Get and decrypt password
+    local encrypted=$(get_encrypted_password "$service")
+    local password=$(decrypt_password "$encrypted" "$master")
+    
+    if [ -z "$password" ]; then
+        echo "Error: Failed to decrypt password" >&2
+        exit 1
+    fi
+    
+    # Copy to clipboard
+    copy_to_clipboard "$password" "$service"
+}
+
+# Delete password for service
+cmd_pop() {
+    local service="$1"
+    
+    if [ -z "$service" ]; then
+        echo "Error: Service name required" >&2
+        echo "Usage: pazman pop <service>" >&2
+        exit 1
+    fi
+    
+    if ! service_exists "$service"; then
+        echo "Error: Service '$service' not found" >&2
+        exit 1
+    fi
+    
+    # Remove entry
+    sed -i.bak "/^${service},/d" "$PASSWORDS_FILE" && rm -f "${PASSWORDS_FILE}.bak"
+    
+    echo "Password for '$service' deleted"
+}
+
+# Update existing password
+cmd_put() {
+    local service="$1"
+    local password="$2"
+    
+    if [ -z "$service" ]; then
+        echo "Error: Service name required" >&2
+        echo "Usage: pazman put <service> [password]" >&2
+        exit 1
+    fi
+    
+    if ! service_exists "$service"; then
+        echo "Error: Service '$service' not found. Use 'pazman set' to create a new entry" >&2
+        exit 1
+    fi
+    
+    # Get master password
+    local master=$(get_master_password)
+    
+    # Generate password if not provided
+    if [ -z "$password" ]; then
+        password=$(generate_password)
+    fi
+    
+    # Encrypt password
+    local encrypted=$(encrypt_password "$password" "$master")
+    
+    # Remove existing entry
+    sed -i.bak "/^${service},/d" "$PASSWORDS_FILE" && rm -f "${PASSWORDS_FILE}.bak"
+    
+    # Add updated entry
+    echo "${service},${encrypted}" >> "$PASSWORDS_FILE"
+    chmod 600 "$PASSWORDS_FILE"
+    
+    # Copy to clipboard
+    copy_to_clipboard "$password" "$service"
+    echo "Password for '$service' updated"
+}
+
+# List all services (without passwords)
+cmd_list() {
+    if [ ! -f "$PASSWORDS_FILE" ] || [ ! -s "$PASSWORDS_FILE" ]; then
+        echo "No passwords stored yet"
+        return
+    fi
+    
+    echo "Stored services:"
+    cut -d',' -f1 "$PASSWORDS_FILE" | sort | sed 's/^/  - /'
+}
+
+# Show usage
+show_usage() {
+    cat << EOF
+pazman - Secure CLI Password Manager
+
+Usage:
+  pazman set <service> [password]    Add/update password (generates if omitted)
+  pazman get <service>               Retrieve password (copies to clipboard)
+  pazman put <service> [password]    Update existing password
+  pazman pop <service>               Delete password
+  pazman list                        List all stored services
+  pazman help                        Show this help message
+
+Security:
+  - Passwords are encrypted with AES-256-CBC
+  - Master password required for all operations
+  - Passwords never displayed in terminal
+  - Clipboard auto-clears after ${CLIPBOARD_TIMEOUT} seconds
+  - Storage: ${PASSWORDS_FILE} (chmod 600)
+EOF
+}
+
+# Main
+main() {
+    init_pazman
+    
+    local command="$1"
+    shift || true
+    
+    case "$command" in
+        set)
+            cmd_set "$1" "$2"
+            ;;
+        get)
+            cmd_get "$1"
+            ;;
+        put)
+            cmd_put "$1" "$2"
+            ;;
+        pop)
+            cmd_pop "$1"
+            ;;
+        list|ls)
+            cmd_list
+            ;;
+        help|--help|-h|"")
+            show_usage
+            ;;
+        *)
+            echo "Error: Unknown command '$command'" >&2
+            echo "Run 'pazman help' for usage information" >&2
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
