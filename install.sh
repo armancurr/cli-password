@@ -10,7 +10,20 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
+
+# Detect if running in PowerShell (wrong installer)
+detect_shell() {
+    if [ -n "$PSVersionTable" ] || [ -n "$PROMPT" ]; then
+        print_message "$RED" "Error: This installer is for Bash/Zsh shells"
+        echo ""
+        print_message "$YELLOW" "You appear to be using PowerShell. Please use the PowerShell installer instead:"
+        print_message "$CYAN" "  iwr -useb https://raw.githubusercontent.com/armancurr/cli-password/main/install.ps1 | iex"
+        echo ""
+        exit 1
+    fi
+}
 
 # Configuration
 REPO_URL="https://raw.githubusercontent.com/armancurr/cli-password/main"
@@ -31,6 +44,18 @@ print_header() {
     print_message "$BLUE" "   pazman Password Manager"
     print_message "$BLUE" "   Secure CLI Installation"
     print_message "$BLUE" "================================"
+    echo ""
+    
+    # Show detected environment
+    local shell_name="Unknown"
+    if [ -n "$BASH_VERSION" ]; then
+        shell_name="Bash"
+    elif [ -n "$ZSH_VERSION" ]; then
+        shell_name="Zsh"
+    fi
+    
+    local os_name=$(uname -s 2>/dev/null || echo "Unknown")
+    print_message "$CYAN" "Detected: $shell_name on $os_name"
     echo ""
 }
 
@@ -199,6 +224,9 @@ main() {
         uninstall_pazman
         exit 0
     fi
+    
+    # Detect shell environment
+    detect_shell
     
     print_header
     check_prerequisites
